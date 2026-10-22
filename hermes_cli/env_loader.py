@@ -393,11 +393,6 @@ def _sanitize_env_file_if_needed(path: Path) -> bool:
     if not path.exists():
         return True
     try:
-        from hermes_cli.config import _sanitize_env_lines
-    except ImportError:
-        return True  # early bootstrap — config module not available yet
-
-    try:
         raw = path.read_bytes()
     except Exception:
         return True
@@ -405,14 +400,18 @@ def _sanitize_env_file_if_needed(path: Path) -> bool:
     # ORDER MATTERS: BOM_UTF32_LE (FF FE 00 00) startswith BOM_UTF16_LE (FF FE); UTF-16 first would mangle it.
     force_utf8_rewrite = False
     if raw.startswith(codecs.BOM_UTF32_LE) or raw.startswith(codecs.BOM_UTF32_BE):
-        # Lazy import keeps the module import block identical to #65124's codecs/io additions so the two PRs
-        # auto-merge either order.
         path_key = str(path.resolve())
         if path_key not in _WARNED_UTF32_PATHS:
             _WARNED_UTF32_PATHS.add(path_key)
             logger.warning("Skipping .env load for %s: UTF-32 BOM detected; "
-                           "leaving file untouched to avoid corruption", path)
+                           "leaving file untouched to avoid corruption. "
+                           "Save it as UTF-8 to load its values", path)
         return False
+    try:
+        from hermes_cli.config import _sanitize_env_lines
+    except ImportError:
+        return True  # early bootstrap — config module not available yet
+
     if raw.startswith(codecs.BOM_UTF16_LE) or raw.startswith(codecs.BOM_UTF16_BE):
         # "utf-16" uses the BOM for endianness and strips it; newline=None matches open()'s universal
         # newlines (not splitlines()'s extra boundaries like U+2028) so sanitize sees the same lines.
@@ -528,7 +527,8 @@ def load_hermes_dotenv(
     # apply_onepassword_secrets() even in cron with no shell state; gitignored so the token never enters
     # the committed .env. override=False lets a systemd `EnvironmentFile=-…/.op.env` token win.
     op_env = home_path / ".op.env"
-    if op_env.exists() and not os.environ.get("OP_SERVICE_ACCOUNT_TOKEN"):
+    if (op_env.exists() and not os.environ.get("OP_SERVICE_ACCOUNT_TOKEN")
+            and _sanitize_env_file_if_needed(op_env)):
         _load_dotenv_with_fallback(op_env, override=False, load_pass=load_pass)
 
     if project_env_loadable and project_env_path is not None:
